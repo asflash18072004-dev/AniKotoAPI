@@ -54,6 +54,28 @@ ALL_MIRRORS.sort((a, b) => a.priority - b.priority);
 const MIRROR_CACHE_KEY = "working_mirror";
 const MIRROR_CACHE_TTL = parseInt(process.env.MIRROR_CACHE_TTL) || 3600000;
 
+function describeUpstreamError(error) {
+  if (error.message?.includes("Endpoint not found")) return error;
+
+  const response = error.response;
+  if (!response) return error;
+
+  const body = typeof response.data === "string"
+    ? response.data
+    : JSON.stringify(response.data ?? "");
+  if (/Just a moment|Checking your browser|cf-chl-|challenge-platform|Enable JavaScript/i.test(body)) {
+    return new Error(`Cloudflare challenge detected (HTTP ${response.status})`);
+  }
+
+  let detail = body.replace(/\s+/g, " ").trim();
+  try {
+    const parsed = JSON.parse(body);
+    detail = parsed.result || parsed.message || detail;
+  } catch { /* Keep the response body preview */ }
+
+  return new Error(`Upstream HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 240)}` : ""}`);
+}
+
 // ══════════════════════════════════════════════════════════════
 // MIRROR STATE
 // ══════════════════════════════════════════════════════════════
@@ -199,11 +221,7 @@ async function fetchWithMirror(path, options = {}) {
         if (response.status === 200) {
           // Check for Cloudflare challenge
           const data = response.data;
-          if (typeof data === "string" && (
-            data.includes("Just a moment...") ||
-            data.includes("Checking your browser") ||
-            data.includes("Enable JavaScript")
-          )) {
+          if (typeof data === "string" && /Just a moment|Checking your browser|cf-chl-|challenge-platform|Enable JavaScript/i.test(data)) {
             throw new Error("Cloudflare challenge detected");
           }
 
@@ -234,9 +252,9 @@ async function fetchWithMirror(path, options = {}) {
           throw new Error(`Endpoint not found: ${path}`);
         }
       } catch (error) {
-        lastError = error;
+        lastError = describeUpstreamError(error);
         // NOTE: Don't retry on 404 — the endpoint simply doesn't exist on this mirror
-        if (error.message?.includes("Endpoint not found")) {
+        if (lastError.message?.includes("Endpoint not found")) {
           break;
         }
         if (attempt < retries) {

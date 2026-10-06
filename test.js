@@ -99,7 +99,7 @@ async function runTest(test) {
     const duration = Date.now() - start;
     
     if (!res.ok) {
-      if (test.optional && (res.status === 404 || res.status === 500)) {
+      if (test.optional && [404, 500, 502].includes(res.status)) {
         console.log(`⏭️  ${test.name} - Skipped (HTTP ${res.status}) (${duration}ms)`);
         skipped++;
         results.push({ name: test.name, status: "SKIP", httpStatus: res.status, duration });
@@ -172,6 +172,7 @@ async function runAll() {
   // NOTE: Fetch info to get numeric animeId for episodes-ajax
   let animeId = "1642";
   let linkId = "";
+  let serverIds = "";
   try {
     const info = await fetchJson("/info?id=one-piece-odmau");
     if (info?.success && info.results?.animeId) {
@@ -182,6 +183,7 @@ async function runAll() {
     if (epData?.success && epData.results?.episodes?.length > 0) {
       const sid = epData.results.episodes[0].server_ids;
       if (sid) {
+        serverIds = sid;
         const srvData = await fetchJson(`/servers?ids=${encodeURIComponent(sid)}`);
         if (srvData?.success && srvData.results?.length > 0) {
           linkId = srvData.results[0].link_id || "";
@@ -192,6 +194,10 @@ async function runAll() {
 
   // ---- FEATURE: Inject dynamic tests with live data ----
   tests.push({ name: "Episodes Ajax", url: `/episodes-ajax/${animeId}`, check: (d) => d.results?.episodes || d.results?.totalEpisodes });
+  if (serverIds) {
+    const serverTest = tests.find((test) => test.name === "Servers");
+    serverTest.url = `/servers?ids=${encodeURIComponent(serverIds)}&slug=one-piece-odmau`;
+  }
   if (linkId) {
     tests.push({ name: "Stream Resolve", url: `/stream/resolve?id=${encodeURIComponent(linkId)}&slug=one-piece-odmau`, check: (d) => d.results?.url, optional: true });
   }

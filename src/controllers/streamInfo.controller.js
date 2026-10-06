@@ -79,7 +79,8 @@ const getStreamInfo = async (req, res, next) => {
  * streaming servers for the given episode IDs.
  *
  * @param {object} req - Express request object
- * @param {string} req.query.ids - Comma-separated episode IDs
+ * @param {string} req.query.ids - Episode server_ids value
+ * @param {string} [req.query.slug] - Optional anime slug for session establishment
  * @param {object} res - Express response object
  * @param {Function} next - Express next middleware function
  * @returns {void} Sends JSON response with server list
@@ -92,16 +93,24 @@ const getStreamInfo = async (req, res, next) => {
  */
 const getServerList = async (req, res, next) => {
   try {
-    const { ids } = req.query;
+    const { ids, slug } = req.query;
     if (!ids) {
       return res.status(400).json({ success: false, message: "Episode IDs are required" });
+    }
+    if (slug && !/^[a-zA-Z0-9-]+(?:\/ep-\d+)?$/.test(slug)) {
+      return res.status(400).json({ success: false, message: "Invalid anime slug" });
     }
     const cacheKey = `servers_${ids}`;
     const cached = getCache(cacheKey);
     if (cached) {
       return res.json({ success: true, results: cached });
     }
-    const data = await extractServerList(ids);
+    let data;
+    try {
+      data = await extractServerList(ids, slug);
+    } catch (upstreamError) {
+      return res.status(502).json({ success: false, message: `Upstream API error: ${upstreamError.message}` });
+    }
     if (!data || data.length === 0) {
       return res.status(404).json({ success: false, message: "No servers found for the given episode IDs", results: [] });
     }

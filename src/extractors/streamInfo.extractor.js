@@ -27,6 +27,32 @@ import { normalizeServerName } from "./streamResolver.extractor.js";
 // STREAM INFO EXTRACTOR
 // ══════════════════════════════════════════════════════════════
 
+function parseAjaxResponse(raw, endpoint) {
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const preview = raw.replace(/\s+/g, " ").trim().slice(0, 240);
+      if (/Just a moment|Checking your browser|cf-chl-|challenge-platform|Enable JavaScript/i.test(raw)) {
+        throw new Error(`Cloudflare challenge detected for ${endpoint}`);
+      }
+      throw new Error(`Upstream returned non-JSON data for ${endpoint}${preview ? `: ${preview}` : ""}`);
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`Upstream returned an invalid response for ${endpoint}`);
+  }
+  if (parsed.status && Number(parsed.status) >= 400) {
+    throw new Error(`Upstream API error (${parsed.status}): ${parsed.result || "Unknown error"}`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(parsed, "result")) {
+    throw new Error(`Upstream response for ${endpoint} is missing result data`);
+  }
+  return parsed;
+}
+
 // ---- FEATURE: Resolve a single stream URL from a linkId ----
 /**
  * Fetches the actual stream URL and skip data for a given server link ID.
@@ -88,16 +114,7 @@ const extractStreamInfo = async (linkId, watchSlug = null) => {
       headers: requestHeaders
     });
 
-    // NOTE: Handle both string JSON and parsed object responses
-    let data = raw;
-    if (typeof raw === "string") {
-      try { data = JSON.parse(raw); } catch { data = {}; }
-    }
-
-    // NOTE: Detect upstream API error responses (e.g. {status: 500, result: "Bad request"})
-    if (data && typeof data === "object" && data.status && Number(data.status) >= 400) {
-      throw new Error(`Upstream API error (${data.status}): ${data.result || "Unknown error"}`);
-    }
+    const data = parseAjaxResponse(raw, path);
 
     if (!data || !data.result) {
       return { linkId, url: null, type: null, skipData: null };
@@ -183,7 +200,11 @@ const extractServerList = async (episodeIds, watchSlug = null) => {
       } catch { /* fallback is best-effort */ }
     }
 
-    const path = `/ajax/server/list?servers=${episodeIds}`;
+    const normalizedIds = String(episodeIds)
+      .split(",")
+      .map(id => id.trim().replace(/ /g, "+"))
+      .join(",");
+    const path = `/ajax/server/list?servers=${encodeURIComponent(normalizedIds)}`;
     const requestHeaders = {
       ...headers,
       "X-Requested-With": "XMLHttpRequest",
@@ -194,18 +215,11 @@ const extractServerList = async (episodeIds, watchSlug = null) => {
       headers: requestHeaders
     });
 
-    // NOTE: Parse JSON response first — fetchWithMirror returns raw text by default
-    let parsed = raw;
-    if (typeof raw === "string") {
-      try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+    const parsed = parseAjaxResponse(raw, path);
+    if (typeof parsed.result !== "string") {
+      throw new Error(`Upstream response for ${path} did not contain server-list HTML`);
     }
-
-    // NOTE: Detect upstream API error responses
-    if (parsed && typeof parsed === "object" && parsed.status && Number(parsed.status) >= 400) {
-      throw new Error(`Upstream API error (${parsed.status}): ${parsed.result || "Unknown error"}`);
-    }
-
-    const html = parsed?.result || "";
+    const html = parsed.result;
     const $ = cheerio.load(html);
 
     const servers = [];
